@@ -1,34 +1,29 @@
 import torch
 import torch.nn as nn
-import torchvision.datasets as dsets
-import torchvision.transforms as transforms
-from torch.autograd import Variable
+import torchvision
+from torchvision import transforms
 from logger import Logger
 
 
-# MNIST Dataset 
-dataset = dsets.MNIST(root='./data', 
-                      train=True, 
-                      transform=transforms.ToTensor(),  
-                      download=True)
+# Device configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Data Loader (Input Pipeline)
+# MNIST dataset 
+dataset = torchvision.datasets.MNIST(root='../../data', 
+                                     train=True, 
+                                     transform=transforms.ToTensor(),  
+                                     download=True)
+
+# Data loader
 data_loader = torch.utils.data.DataLoader(dataset=dataset, 
                                           batch_size=100, 
                                           shuffle=True)
 
-def to_np(x):
-    return x.data.cpu().numpy()
 
-def to_var(x):
-    if torch.cuda.is_available():
-        x = x.cuda()
-    return Variable(x)    
-    
-# Neural Network Model (1 hidden layer)
-class Net(nn.Module):
+# Fully connected neural network with one hidden layer
+class NeuralNet(nn.Module):
     def __init__(self, input_size=784, hidden_size=500, num_classes=10):
-        super(Net, self).__init__()
+        super(NeuralNet, self).__init__()
         self.fc1 = nn.Linear(input_size, hidden_size) 
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(hidden_size, num_classes)  
@@ -39,16 +34,13 @@ class Net(nn.Module):
         out = self.fc2(out)
         return out
 
-net = Net()
-if torch.cuda.is_available():
-    net.cuda()
+model = NeuralNet().to(device)
 
-# Set the logger
 logger = Logger('./logs')
 
-# Loss and Optimizer
+# Loss and optimizer
 criterion = nn.CrossEntropyLoss()  
-optimizer = torch.optim.Adam(net.parameters(), lr=0.00001)  
+optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)  
 
 data_iter = iter(data_loader)
 iter_per_epoch = len(data_loader)
@@ -61,14 +53,16 @@ for step in range(total_step):
     if (step+1) % iter_per_epoch == 0:
         data_iter = iter(data_loader)
 
-    # Fetch the images and labels and convert them to variables
+    # Fetch images and labels
     images, labels = next(data_iter)
-    images, labels = to_var(images.view(images.size(0), -1)), to_var(labels)
+    images, labels = images.view(images.size(0), -1).to(device), labels.to(device)
     
-    # Forward, backward and optimize
-    optimizer.zero_grad()  # zero the gradient buffer
-    outputs = net(images)
+    # Forward pass
+    outputs = model(images)
     loss = criterion(outputs, labels)
+    
+    # Backward and optimize
+    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
@@ -77,29 +71,27 @@ for step in range(total_step):
     accuracy = (labels == argmax.squeeze()).float().mean()
 
     if (step+1) % 100 == 0:
-        print ('Step [%d/%d], Loss: %.4f, Acc: %.2f' 
-               %(step+1, total_step, loss.data[0], accuracy.data[0]))
+        print ('Step [{}/{}], Loss: {:.4f}, Acc: {:.2f}' 
+               .format(step+1, total_step, loss.item(), accuracy.item()))
 
-        #============ TensorBoard logging ============#
-        # (1) Log the scalar values
-        info = {
-            'loss': loss.data[0],
-            'accuracy': accuracy.data[0]
-        }
+        # ================================================================== #
+        #                        Tensorboard Logging                         #
+        # ================================================================== #
+
+        # 1. Log scalar values (scalar summary)
+        info = { 'loss': loss.item(), 'accuracy': accuracy.item() }
 
         for tag, value in info.items():
             logger.scalar_summary(tag, value, step+1)
 
-        # (2) Log values and gradients of the parameters (histogram)
-        for tag, value in net.named_parameters():
+        # 2. Log values and gradients of the parameters (histogram summary)
+        for tag, value in model.named_parameters():
             tag = tag.replace('.', '/')
-            logger.histo_summary(tag, to_np(value), step+1)
-            logger.histo_summary(tag+'/grad', to_np(value.grad), step+1)
+            logger.histo_summary(tag, value.data.cpu().numpy(), step+1)
+            logger.histo_summary(tag+'/grad', value.grad.data.cpu().numpy(), step+1)
 
-        # (3) Log the images
-        info = {
-            'images': to_np(images.view(-1, 28, 28)[:10])
-        }
+        # 3. Log training images (image summary)
+        info = { 'images': images.view(-1, 28, 28)[:10].cpu().numpy() }
 
         for tag, images in info.items():
             logger.image_summary(tag, images, step+1)

@@ -1,31 +1,41 @@
-# Implementation of https://arxiv.org/pdf/1512.03385.pdf.
-# See section 4.2 for model architecture on CIFAR-10.
-# Some part of the code was referenced below.
-# https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
-import torch 
-import torch.nn as nn
-import torchvision.datasets as dsets
-import torchvision.transforms as transforms
-from torch.autograd import Variable
+# ---------------------------------------------------------------------------- #
+# An implementation of https://arxiv.org/pdf/1512.03385.pdf                    #
+# See section 4.2 for the model architecture on CIFAR-10                       #
+# Some part of the code was referenced from below                              #
+# https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py   #
+# ---------------------------------------------------------------------------- #
 
-# Image Preprocessing 
+import torch
+import torch.nn as nn
+import torchvision
+import torchvision.transforms as transforms
+
+
+# Device configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Hyper-parameters
+num_epochs = 80
+learning_rate = 0.001
+
+# Image preprocessing modules
 transform = transforms.Compose([
-    transforms.Scale(40),
+    transforms.Pad(4),
     transforms.RandomHorizontalFlip(),
     transforms.RandomCrop(32),
     transforms.ToTensor()])
 
-# CIFAR-10 Dataset
-train_dataset = dsets.CIFAR10(root='./data/',
-                               train=True, 
-                               transform=transform,
-                               download=True)
+# CIFAR-10 dataset
+train_dataset = torchvision.datasets.CIFAR10(root='../../data/',
+                                             train=True, 
+                                             transform=transform,
+                                             download=True)
 
-test_dataset = dsets.CIFAR10(root='./data/',
-                              train=False, 
-                              transform=transforms.ToTensor())
+test_dataset = torchvision.datasets.CIFAR10(root='../../data/',
+                                            train=False, 
+                                            transform=transforms.ToTensor())
 
-# Data Loader (Input Pipeline)
+# Data loader
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                            batch_size=100, 
                                            shuffle=True)
@@ -34,12 +44,12 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
                                           batch_size=100, 
                                           shuffle=False)
 
-# 3x3 Convolution
+# 3x3 convolution
 def conv3x3(in_channels, out_channels, stride=1):
     return nn.Conv2d(in_channels, out_channels, kernel_size=3, 
                      stride=stride, padding=1, bias=False)
 
-# Residual Block
+# Residual block
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, downsample=None):
         super(ResidualBlock, self).__init__()
@@ -63,7 +73,7 @@ class ResidualBlock(nn.Module):
         out = self.relu(out)
         return out
 
-# ResNet Module
+# ResNet
 class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes=10):
         super(ResNet, self).__init__()
@@ -102,46 +112,58 @@ class ResNet(nn.Module):
         out = self.fc(out)
         return out
     
-resnet = ResNet(ResidualBlock, [2, 2, 2, 2])
+model = ResNet(ResidualBlock, [2, 2, 2, 2]).to(device)
 
 
-# Loss and Optimizer
+# Loss and optimizer
 criterion = nn.CrossEntropyLoss()
-lr = 0.001
-optimizer = torch.optim.Adam(resnet.parameters(), lr=lr)
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-# Training 
-for epoch in range(80):
+# For updating learning rate
+def update_lr(optimizer, lr):    
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+# Train the model
+total_step = len(train_loader)
+curr_lr = learning_rate
+for epoch in range(num_epochs):
     for i, (images, labels) in enumerate(train_loader):
-        images = Variable(images)
-        labels = Variable(labels)
+        images = images.to(device)
+        labels = labels.to(device)
         
-        # Forward + Backward + Optimize
-        optimizer.zero_grad()
-        outputs = resnet(images)
+        # Forward pass
+        outputs = model(images)
         loss = criterion(outputs, labels)
+        
+        # Backward and optimize
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         
         if (i+1) % 100 == 0:
-            print ("Epoch [%d/%d], Iter [%d/%d] Loss: %.4f" %(epoch+1, 80, i+1, 500, loss.data[0]))
+            print ("Epoch [{}/{}], Step [{}/{}] Loss: {:.4f}"
+                   .format(epoch+1, num_epochs, i+1, total_step, loss.item()))
 
-    # Decaying Learning Rate
+    # Decay learning rate
     if (epoch+1) % 20 == 0:
-        lr /= 3
-        optimizer = torch.optim.Adam(resnet.parameters(), lr=lr) 
+        curr_lr /= 3
+        update_lr(optimizer, curr_lr)
 
-# Test
-correct = 0
-total = 0
-for images, labels in test_loader:
-    images = Variable(images)
-    outputs = resnet(images)
-    _, predicted = torch.max(outputs.data, 1)
-    total += labels.size(0)
-    correct += (predicted == labels).sum()
+# Test the model
+model.eval()
+with torch.no_grad():
+    correct = 0
+    total = 0
+    for images, labels in test_loader:
+        images = images.to(device)
+        labels = labels.to(device)
+        outputs = model(images)
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
 
-print('Accuracy of the model on the test images: %d %%' % (100 * correct / total))
+    print('Accuracy of the model on the test images: {} %'.format(100 * correct / total))
 
-# Save the Model
-torch.save(resnet.state_dict(), 'resnet.pkl')
+# Save the model checkpoint
+torch.save(model.state_dict(), 'resnet.ckpt')

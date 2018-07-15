@@ -1,11 +1,13 @@
 import torch 
 import torch.nn as nn
-import torchvision.datasets as dsets
+import torchvision
 import torchvision.transforms as transforms
-from torch.autograd import Variable
 
 
-# Hyper Parameters
+# Device configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Hyper-parameters
 sequence_length = 28
 input_size = 28
 hidden_size = 128
@@ -15,17 +17,17 @@ batch_size = 100
 num_epochs = 2
 learning_rate = 0.003
 
-# MNIST Dataset
-train_dataset = dsets.MNIST(root='./data/',
-                            train=True, 
-                            transform=transforms.ToTensor(),
-                            download=True)
+# MNIST dataset
+train_dataset = torchvision.datasets.MNIST(root='../../data/',
+                                           train=True, 
+                                           transform=transforms.ToTensor(),
+                                           download=True)
 
-test_dataset = dsets.MNIST(root='./data/',
-                           train=False, 
-                           transform=transforms.ToTensor())
+test_dataset = torchvision.datasets.MNIST(root='../../data/',
+                                          train=False, 
+                                          transform=transforms.ToTensor())
 
-# Data Loader (Input Pipeline)
+# Data loader
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                            batch_size=batch_size, 
                                            shuffle=True)
@@ -34,63 +36,67 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
                                           batch_size=batch_size, 
                                           shuffle=False)
 
-# BiRNN Model (Many-to-One)
+# Bidirectional recurrent neural network (many-to-one)
 class BiRNN(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, num_classes):
         super(BiRNN, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, 
-                            batch_first=True, bidirectional=True)
-        self.fc = nn.Linear(hidden_size*2, num_classes)  # 2 for bidirection 
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, bidirectional=True)
+        self.fc = nn.Linear(hidden_size*2, num_classes)  # 2 for bidirection
     
     def forward(self, x):
         # Set initial states
-        h0 = Variable(torch.zeros(self.num_layers*2, x.size(0), self.hidden_size)) # 2 for bidirection 
-        c0 = Variable(torch.zeros(self.num_layers*2, x.size(0), self.hidden_size))
+        h0 = torch.zeros(self.num_layers*2, x.size(0), self.hidden_size).to(device) # 2 for bidirection 
+        c0 = torch.zeros(self.num_layers*2, x.size(0), self.hidden_size).to(device)
         
-        # Forward propagate RNN
-        out, _ = self.lstm(x, (h0, c0))
+        # Forward propagate LSTM
+        out, _ = self.lstm(x, (h0, c0))  # out: tensor of shape (batch_size, seq_length, hidden_size*2)
         
-        # Decode hidden state of last time step
+        # Decode the hidden state of the last time step
         out = self.fc(out[:, -1, :])
         return out
 
-rnn = BiRNN(input_size, hidden_size, num_layers, num_classes)
+model = BiRNN(input_size, hidden_size, num_layers, num_classes).to(device)
 
 
-# Loss and Optimizer
+# Loss and optimizer
 criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(rnn.parameters(), lr=learning_rate)
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     
-# Train the Model 
+# Train the model
+total_step = len(train_loader)
 for epoch in range(num_epochs):
     for i, (images, labels) in enumerate(train_loader):
-        images = Variable(images.view(-1, sequence_length, input_size))
-        labels = Variable(labels)
+        images = images.reshape(-1, sequence_length, input_size).to(device)
+        labels = labels.to(device)
         
-        # Forward + Backward + Optimize
-        optimizer.zero_grad()
-        outputs = rnn(images)
+        # Forward pass
+        outputs = model(images)
         loss = criterion(outputs, labels)
+        
+        # Backward and optimize
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         
         if (i+1) % 100 == 0:
-            print ('Epoch [%d/%d], Step [%d/%d], Loss: %.4f' 
-                   %(epoch+1, num_epochs, i+1, len(train_dataset)//batch_size, loss.data[0]))
+            print ('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}' 
+                   .format(epoch+1, num_epochs, i+1, total_step, loss.item()))
 
-# Test the Model
-correct = 0
-total = 0
-for images, labels in test_loader:
-    images = Variable(images.view(-1, sequence_length, input_size))
-    outputs = rnn(images)
-    _, predicted = torch.max(outputs.data, 1)
-    total += labels.size(0)
-    correct += (predicted == labels).sum()
+# Test the model
+with torch.no_grad():
+    correct = 0
+    total = 0
+    for images, labels in test_loader:
+        images = images.reshape(-1, sequence_length, input_size).to(device)
+        labels = labels.to(device)
+        outputs = model(images)
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
 
-print('Test Accuracy of the model on the 10000 test images: %d %%' % (100 * correct / total)) 
+    print('Test Accuracy of the model on the 10000 test images: {} %'.format(100 * correct / total)) 
 
-# Save the Model
-torch.save(rnn.state_dict(), 'rnn.pkl')
+# Save the model checkpoint
+torch.save(model.state_dict(), 'model.ckpt')

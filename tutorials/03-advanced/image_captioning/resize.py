@@ -19,17 +19,15 @@ def resize_images(image_dir, output_dir, size):
             with Image.open(f) as img:
                 img = resize_image(img, size)
                 img.save(os.path.join(output_dir, image), img.format)
-        if i % 100 == 0:
-            print ("[%d/%d] Resized the images and saved into '%s'."
-                   %(i, num_images, output_dir))
+        if (i+1) % 100 == 0:
+            print ("[{}/{}] Resized the images and saved into '{}'."
+                   .format(i+1, num_images, output_dir))
 
 def main(args):
-    splits = ['train', 'val']
-    for split in splits:
-        image_dir = args.image_dir
-        output_dir = args.output_dir
-        image_size = [args.image_size, args.image_size]
-        resize_images(image_dir, output_dir, image_size)
+    image_dir = args.image_dir
+    output_dir = args.output_dir
+    image_size = [args.image_size, args.image_size]
+    resize_images(image_dir, output_dir, image_size)
 
 
 if __name__ == '__main__':
